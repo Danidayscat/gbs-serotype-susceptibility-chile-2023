@@ -1,7 +1,5 @@
 # Serotype and antibiotic susceptibility of Group B Streptococcus in pregnant women in Santiago, Chile
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
-
 ## Overview
 
 This repository contains the R analysis code and supplementary statistical report
