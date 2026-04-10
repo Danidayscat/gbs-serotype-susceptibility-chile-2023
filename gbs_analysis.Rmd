@@ -1,0 +1,439 @@
+---
+title: "Serotype and antibiotic susceptibility of Group B Streptococcus in pregnant women in Santiago, Chile"
+output:
+  pdf_document:
+    keep_tex: yes
+    toc: yes
+    toc_depth: 6
+    latex_engine: xelatex
+header-includes:
+   - \usepackage[default]{sourcesanspro}
+   - \usepackage{amsmath}
+   - \usepackage{float}
+   - \usepackage{booktabs}
+   - \usepackage{tabu}
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE, comment = NA, prompt = TRUE, tidy = T, tidy.opts=list(width.cutoff=60), echo = TRUE, message = FALSE, warning = FALSE, cache=T)
+
+Sys.setlocale("LC_TIME", "C")
+
+install_and_load_packages <- function(packages) {
+  for (package in packages) {
+    if (!require(package, character.only = TRUE)) {
+      install.packages(package)
+      library(package, character.only = TRUE)
+    }
+  }
+}
+
+necessary_packages <- c(
+  "tidyverse",
+  "readxl",
+  "knitr",
+  "kableExtra"
+)
+
+install_and_load_packages(necessary_packages)
+
+```
+
+\newpage
+
+# Supplementary Material: Statistical Analysis
+
+## S1. Data Preprocessing
+
+Raw data were imported from datos.xlsx (n = 185 isolates). Susceptibility values for erythromycin and clindamycin contained numeric inhibition halo annotations (e.g., "R 10", "R 30", "R 62") that were recoded into binary variables: any value beginning with "R" was classified as resistant (R), and "S" as susceptible. Resistance phenotypes were grouped into five categories: cMLSB, iMLSB, L, M, and susceptible.
+
+Final serotype distribution: Ia = 47, Ib = 26, II = 20, III = 41, IV = 13, V = 26, VI = 1, VII = 1, IX = 4, NT = 6 (total = 185).
+
+```{r data-preprocessing, echo=FALSE}
+datos <- read_excel("datos.xlsx")
+
+datos <- datos %>%
+  mutate(
+    Ery  = if_else(str_starts(Eritromicina, "R"), "R", "S"),
+    Cli  = if_else(str_starts(Clindamicina, "R"), "R", "S"),
+    Pen  = Penicilina,
+    Van  = Vancomicina,
+    Phenotype = case_when(
+      is.na(`Fenotipo Resistencia`)               ~ "Susceptible",
+      str_starts(`Fenotipo Resistencia`, "MLSBc") ~ "cMLSB",
+      str_starts(`Fenotipo Resistencia`, "MLSBi") ~ "iMLSB",
+      str_starts(`Fenotipo Resistencia`, "M")     ~ "M",
+      str_starts(`Fenotipo Resistencia`, "L")     ~ "L",
+      TRUE                                        ~ "Other"
+    ),
+    Serotype = factor(Serotipo,
+      levels = c("Ia","Ib","II","III","IV","V","VI","VII","IX","NT"))
+  )
+
+table(datos$Serotype)
+table(datos$Ery)
+table(datos$Cli)
+table(datos$Phenotype)
+```
+\newpage
+
+## S2. Overall Antimicrobial Susceptibility
+Susceptibility proportions for each antibiotic were calculated over the total 185 isolates. Ninety-five percent confidence intervals were estimated using the Wilson score method (prop.test, without continuity correction).
+
+```{r overall-susceptibility, echo=FALSE}
+# Wilson 95% CI for a single proportion
+wilson_ci <- function(x, n) {
+  test <- prop.test(x, n, correct = FALSE)
+  tibble(
+    n_susceptible = x,
+    n_total       = n,
+    pct           = round(x / n * 100, 1),
+    CI_low   = round(test$conf.int[1] * 100, 1),
+    CI_high  = round(test$conf.int[2] * 100, 1)
+  )
+}
+
+susc_global <- bind_rows(
+  wilson_ci(sum(datos$Pen == "S"), 185) %>% mutate(Antibiotic = "Penicillin"),
+  wilson_ci(sum(datos$Ery == "S"), 185) %>% mutate(Antibiotic = "Erythromycin"),
+  wilson_ci(sum(datos$Cli == "S"), 185) %>% mutate(Antibiotic = "Clindamycin"),
+  wilson_ci(sum(datos$Van == "S"), 185) %>% mutate(Antibiotic = "Vancomycin")
+) %>%
+  select(Antibiotic, n_susceptible, n_total, pct, CI_low, CI_high)
+
+susc_global %>%
+  rename(
+    "Antibiotic"   = Antibiotic,
+    "n (S)"        = n_susceptible,
+    "n (total)"    = n_total,
+    "% S"          = pct,
+    "95% CI lower" = CI_low,
+    "95% CI upper" = CI_high
+  ) %>%
+  kable(
+    format    = "latex",
+    booktabs  = TRUE,
+    caption   = "Table S1. Overall antimicrobial susceptibility (n = 185)",
+    align     = c("l","c","c","c","c","c")
+  ) %>%
+  kable_styling(
+    latex_options = c("HOLD_position", "striped"),
+    font_size     = 9,
+    full_width    = FALSE
+  )
+```
+
+\newpage
+
+## S3. Antimicrobial Susceptibility by Serotype
+
+Susceptible and resistant counts were calculated from raw data. Results were internally consistent across all serotypes. Ninety-five percent confidence intervals were estimated using the exact Clopper–Pearson method.
+
+```{r susceptibility-by-serotype, echo=FALSE, results='asis'}
+serotypes_analysis <- c("Ia","Ib","II","III","IV","V","IX","NT")
+
+cp_ci <- function(x, n) {
+  t <- binom.test(x, n)
+  paste0("(", round(t$conf.int*100,1), "–", round(t$conf.int*100,1), ")")[1][2]
+}
+
+susc_by_serotype <- datos %>%
+  filter(Serotipo %in% serotypes_analysis) %>%
+  group_by(Serotipo) %>%
+  summarise(
+    n     = n(),
+    Ery_S = sum(Ery == "S"),
+    Cli_S = sum(Cli == "S"),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Ery_pct = round(Ery_S / n * 100, 1),
+    Cli_pct = round(Cli_S / n * 100, 1),
+    Ery_CI  = map2_chr(Ery_S, n, cp_ci),
+    Cli_CI  = map2_chr(Cli_S, n, cp_ci)
+  )
+
+susc_by_serotype %>%
+  select(Serotipo, n, Ery_S, Ery_pct, Ery_CI, Cli_S, Cli_pct, Cli_CI) %>%
+  rename(
+    "Serotype"       = Serotipo,
+    "n"              = n,
+    "Ery (n S)"      = Ery_S,
+    "Ery (%)"        = Ery_pct,
+    "Ery 95% CI"     = Ery_CI,
+    "Cli (n S)"      = Cli_S,
+    "Cli (%)"        = Cli_pct,
+    "Cli 95% CI"     = Cli_CI
+  ) %>%
+  kbl(
+    format   = "latex",
+    booktabs = TRUE,
+    caption  = "Table S2. Antimicrobial susceptibility by serotype with 95\\% CI (Clopper–Pearson)",
+    align    = c("l","c","c","c","c","c","c","c"),
+    linesep  = ""
+  ) %>%
+  kable_styling(
+    latex_options = c("HOLD_position", "striped"),
+    font_size     = 9,
+    full_width    = FALSE
+  ) %>%
+  add_header_above(
+    c(" " = 2, "Erythromycin" = 3, "Clindamycin" = 3),
+    bold = FALSE, line = TRUE
+  ) %>%
+  print()
+```
+
+\newpage
+
+## S4. Resistance Phenotype Distribution
+
+The cMLSB phenotype was the most prevalent (n = 44), distributed across 9 of the 10 identified serotypes. Phenotype counts per serotype were internally consistent with the manuscript values.
+
+```{r phenotype-distribution, echo=FALSE}
+tab_phenotype <- datos %>%
+  filter(Phenotype != "Susceptible") %>%
+  select(Serotipo, Phenotype) %>%
+  table()
+
+print(tab_phenotype)
+fisher.test(tab_phenotype, simulate.p.value = TRUE, B = 10000)
+
+datos %>%
+  count(Phenotype) %>%
+  mutate(
+    pct     = round(n / 185 * 100, 1),
+    CI_low  = map_dbl(n, ~prop.test(.x, 185, correct=FALSE)$conf.int[1]*100) %>% round(1),
+    CI_high = map_dbl(n, ~prop.test(.x, 185, correct=FALSE)$conf.int[2]*100) %>% round(1),
+    CI      = paste0("(", CI_low, "–", CI_high, "%)")
+  ) %>%
+  arrange(desc(n)) %>%
+  select(Phenotype, n, pct, CI) %>%
+  rename("95% CI" = CI, "%" = pct) %>%
+  kable(
+    format   = "latex",
+    booktabs = TRUE,
+    caption  = "Table S3. Distribution of resistance phenotypes (n = 185)",
+    align    = c("l","c","c","c")
+  ) %>%
+  kable_styling(
+    latex_options = c("HOLD_position", "striped"),
+    font_size     = 9,
+    full_width    = FALSE
+  )
+```
+
+\newpage
+
+### Global Comparison of Susceptibility Across Serotypes
+
+Because 31.25% of expected cell counts fell below 5 (serotypes IX and NT, n ≤ 4), Fisher's exact test with Monte Carlo simulation (10,000 replicates) was applied instead of chi-squared.
+
+```{r global-fisher, echo=FALSE}
+tab_ery <- datos %>%
+  filter(Serotipo %in% serotypes_analysis) %>%
+  mutate(Serotipo = droplevels(factor(Serotipo))) %>%
+  select(Serotipo, Ery) %>%
+  table()
+
+tab_cli <- datos %>%
+  filter(Serotipo %in% serotypes_analysis) %>%
+  mutate(Serotipo = droplevels(factor(Serotipo))) %>%
+  select(Serotipo, Cli) %>%
+  table()
+
+select_test <- function(tab, label) {
+  chi      <- suppressWarnings(chisq.test(tab))
+  pct_low  <- mean(chi$expected < 5) * 100
+  cat("--", label, "--\n")
+  cat("Cells with expected count < 5:", round(pct_low, 2), "%\n")
+  if (any(chi$expected < 5)) {
+    f <- fisher.test(tab, simulate.p.value = TRUE, B = 10000)
+    cat("Fisher's exact test (Monte Carlo), p =", round(f$p.value, 4), "\n\n")
+    return(f)
+  } else {
+    cat("Chi-squared, X2 =", round(chi$statistic, 2),
+        "df =", chi$parameter,
+        "p =", round(chi$p.value, 4), "\n\n")
+    return(chi)
+  }
+}
+
+result_ery <- select_test(tab_ery, "Erythromycin")
+result_cli <- select_test(tab_cli, "Clindamycin")
+```
+\newpage
+
+## S6. Pairwise Comparisons Among Predominant Serotypes (Clindamycin)
+
+Pairwise comparisons among the three most prevalent serotypes (Ia, III, V) were performed using Fisher's exact test with Bonferroni correction (adjusted α = 0.017 for three simultaneous comparisons).
+
+```{r pairwise-serotypes, echo=FALSE}
+pairwise_fisher <- function(df, s1, s2) {
+  sub <- df %>% filter(Serotipo %in% c(s1, s2))
+  tab <- table(sub$Serotipo, sub$Cli)
+  f   <- fisher.test(tab)
+  cat(s1, "vs", s2, "-- p =", round(f$p.value, 4), "\n")
+  return(f)
+}
+
+pairwise_fisher(datos, "Ia",  "III")
+pairwise_fisher(datos, "Ia",  "V")
+pairwise_fisher(datos, "III", "V")
+```
+
+\newpage
+
+## S7. Comparison with Historical Chilean Cohorts (Clindamycin)
+
+Clindamycin susceptibility was compared against four previously published Chilean studies using two-proportion Z-tests (without continuity correction).
+
+```{r historical-comparison, echo=FALSE}
+compare_historical <- function(n_S_current, n_current, n_S_prev, n_prev, reference) {
+  test <- prop.test(
+    x         = c(n_S_current, n_S_prev),
+    n         = c(n_current,   n_prev),
+    correct   = FALSE,
+    alternative = "two.sided"
+  )
+  tibble(
+    Reference       = reference,
+    pct_current     = round(n_S_current / n_current * 100, 1),
+    pct_historical  = round(n_S_prev    / n_prev    * 100, 1),
+    p_value         = if_else(test$p.value < 0.0001, "< 0.0001",
+                              as.character(round(test$p.value, 4))),
+    significant     = if_else(test$p.value < 0.05, "Yes *", "No")
+  )
+}
+
+n_cli_S <- sum(datos$Cli == "S")
+
+bind_rows(
+  compare_historical(n_cli_S, 185, round(0.967*183), 183, "Belmar et al. 2002"),
+  compare_historical(n_cli_S, 185, round(0.960*65),   65, "Martínez et al. 2004"),
+  compare_historical(n_cli_S, 185, round(0.869*99),   99, "Abarzúa et al. 2011"),
+  compare_historical(n_cli_S, 185, round(0.863*167), 167, "Abarzúa et al. 2014")
+) %>%
+  rename(
+    "Reference"        = Reference,
+    "% This study"     = pct_current,
+    "% Historical"     = pct_historical,
+    "p-value"          = p_value,
+    "Significant"      = significant
+  ) %>%
+  kable(
+    format   = "latex",
+    booktabs = TRUE,
+    caption  = "Table S4. Clindamycin susceptibility: this study vs. prior Chilean cohorts",
+    align    = c("l","c","c","c","c")
+  ) %>%
+  kable_styling(
+    latex_options = c("HOLD_position", "striped"),
+    font_size     = 9,
+    full_width    = FALSE
+  )
+```
+
+\newpage
+
+## S8. Phenotype Comparison: Serotypes Ia vs. III
+
+```{r Ia-vs-III-phenotypes, echo=FALSE}
+tab_Ia_III <- datos %>%
+  filter(Serotipo %in% c("Ia","III"), Phenotype != "Susceptible") %>%
+  mutate(Serotipo = droplevels(factor(Serotipo))) %>%
+  select(Serotipo, Phenotype) %>%
+  table()
+
+print(tab_Ia_III)
+fisher.test(tab_Ia_III, simulate.p.value = TRUE, B = 10000)
+
+n_Ia  <- sum(datos$Serotipo == "Ia")
+n_III <- sum(datos$Serotipo == "III")
+
+# cMLSB: Ia (10/47) vs III (14/41)
+prop.test(
+  c(sum(datos$Serotipo == "Ia"  & datos$Phenotype == "cMLSB"),
+    sum(datos$Serotipo == "III" & datos$Phenotype == "cMLSB")),
+  c(n_Ia, n_III),
+  correct = FALSE
+)
+
+# L phenotype: Ia (5/47) vs III (1/41)
+l_Ia  <- sum(datos$Serotipo == "Ia"  & datos$Phenotype == "L")
+l_III <- sum(datos$Serotipo == "III" & datos$Phenotype == "L")
+
+fisher.test(matrix(c(l_Ia, n_Ia - l_Ia, l_III, n_III - l_III), nrow = 2))
+```
+
+\newpage
+
+## S9. Serotype Distribution: Comparison with Martínez et al. (2004)
+
+Serotype distribution was compared with the only prior Chilean study 
+reporting serotype-level data (Martínez et al. 2004, n = 65) using 
+Fisher's exact test with Monte Carlo simulation and pairwise 
+two-proportion Z-tests. Serotypes absent in Martínez et al. 2004 
+(IV, VI, VII, IX) were excluded from pairwise comparisons.
+
+```{r serotype-temporal-comparison, echo=FALSE}
+shared_serotypes <- c("Ia","Ib","II","III","V","NT")
+
+martinez_2004 <- tibble(
+  Serotype   = shared_serotypes,
+  n_martinez = c(20, 3, 14, 24, 1, 3)
+)
+
+this_study <- tibble(
+  Serotype = shared_serotypes,
+  n_current = c(47, 26, 21, 41, 26, 5)
+)
+
+tab_temporal <- rbind(
+  this_study$n_current,
+  martinez_2004$n_martinez
+)
+colnames(tab_temporal) <- shared_serotypes
+rownames(tab_temporal) <- c("This study (2023)", "Martínez et al. 2004")
+
+print(tab_temporal)
+
+# Global Fisher test
+fisher.test(tab_temporal, simulate.p.value = TRUE, B = 10000)
+
+# Pairwise comparisons per serotype
+compare_serotype_temporal <- function(sero) {
+  n1    <- this_study$n_current[this_study$Serotype == sero]
+  n2    <- martinez_2004$n_martinez[martinez_2004$Serotype == sero]
+  test  <- prop.test(c(n1, n2), c(185, 65), correct = FALSE)
+  tibble(
+    Serotype          = sero,
+    pct_current       = round(n1 / 185 * 100, 1),
+    pct_martinez      = round(n2 / 65  * 100, 1),
+    p_value           = if_else(test$p.value < 0.0001, "< 0.0001",
+                                as.character(round(test$p.value, 4))),
+    significant       = if_else(test$p.value < 0.05, "Yes *", "No")
+  )
+}
+
+bind_rows(lapply(shared_serotypes, compare_serotype_temporal)) %>%
+  rename(
+    "Serotype"               = Serotype,
+    "% This study"           = pct_current,
+    "% Martínez et al. 2004" = pct_martinez,
+    "p-value"                = p_value,
+    "Significant"            = significant
+  ) %>%
+  kable(
+    format   = "latex",
+    booktabs = TRUE,
+    caption  = "Table S5. Serotype distribution: this study vs. Martínez et al. 2004",
+    align    = c("l","c","c","c","c")
+  ) %>%
+  kable_styling(
+    latex_options = c("HOLD_position", "striped"),
+    font_size     = 9,
+    full_width    = FALSE
+  )
+```
